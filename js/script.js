@@ -13,6 +13,7 @@
 
   const menuToggle = document.getElementById('menu-toggle');
   const menuContainer = document.getElementById('menu-container');
+  const menuNav = menuToggle ? menuToggle.closest('nav') : null;
 
   // Matches the clip-path transition duration in main_input.css. The panel
   // stays in the DOM (and clickable) through the closing animation, then gets
@@ -24,9 +25,12 @@
     if (!menuToggle || !menuContainer) return;
     menuToggle.setAttribute('aria-expanded', String(open));
     clearTimeout(menuCloseTimer);
+    // Stop the page behind the (now full-screen) panel from scrolling too.
+    document.body.classList.toggle('overflow-hidden', open);
 
     if (open) {
       menuContainer.hidden = false;
+      if (menuNav) menuNav.classList.add('menu-open');
       // Force a reflow between un-hiding and adding .is-open — otherwise the
       // browser coalesces both changes into one frame and the panel just
       // appears with no roll-down transition.
@@ -38,8 +42,12 @@
     menuContainer.classList.remove('is-open');
     if (menuContainer.hidden || reduceMotion) {
       menuContainer.hidden = true;
+      if (menuNav) menuNav.classList.remove('menu-open');
     } else {
-      menuCloseTimer = setTimeout(() => { menuContainer.hidden = true; }, MENU_TRANSITION_MS);
+      menuCloseTimer = setTimeout(() => {
+        menuContainer.hidden = true;
+        if (menuNav) menuNav.classList.remove('menu-open');
+      }, MENU_TRANSITION_MS);
     }
   }
 
@@ -210,10 +218,15 @@
           revealObserver.unobserve(entry.target);
         });
       },
-      // rootMargin rather than a threshold fraction: a section taller than the
-      // viewport can never reach a 0.12 intersection ratio and would stay
-      // hidden forever on small screens.
-      { rootMargin: '0px 0px -12% 0px' }
+      // Positive bottom margin (not a threshold fraction, and not negative):
+      // it grows the intersection root past the actual viewport edge, so a
+      // section starts revealing while it's still below the fold and has
+      // finished its 250ms fade by the time it scrolls into view. With a
+      // negative/zero margin the section only starts revealing once it's
+      // already on screen, which read as the section's own background
+      // (photo/dark band) sitting there inert for a beat before the content
+      // suddenly popped in on top of it.
+      { rootMargin: '0px 0px 20% 0px' }
     );
     revealTargets.forEach((el) => revealObserver.observe(el));
   } else {
