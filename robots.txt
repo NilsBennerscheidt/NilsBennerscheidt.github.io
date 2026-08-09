@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://bedachungen-buse.de/sitemap.xml
