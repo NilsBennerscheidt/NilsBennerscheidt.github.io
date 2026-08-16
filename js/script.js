@@ -83,6 +83,14 @@
     });
   });
 
+  // A panel's own × (e.g. the VELUX drawer) just delegates to its trigger
+  // button rather than duplicating the open/close state — the trigger is
+  // the single source of truth for aria-expanded and the chevron icon.
+  document.querySelectorAll('[data-accordion-close]').forEach((closeBtn) => {
+    const trigger = document.getElementById(closeBtn.getAttribute('data-accordion-close'));
+    if (trigger) closeBtn.addEventListener('click', () => trigger.click());
+  });
+
   /* ------------------------------------------------------------- gallery -- */
 
   const dataEl = document.getElementById('gallery-data');
@@ -237,18 +245,26 @@
 
   const stormBanner = document.getElementById('stormBanner');
   if (stormBanner) {
-    const STORM_KMH = 75;
-    const url =
-      'https://api.open-meteo.com/v1/forecast?latitude=51.6595&longitude=7.3465' +
-      '&daily=rain_sum,wind_speed_10m_max,wind_gusts_10m_max&timezone=Europe%2FBerlin' +
-      '&past_days=14&forecast_days=3';
+    // Bright Sky is a free JSON wrapper around the DWD's own official warning
+    // feed (https://brightsky.dev) — no API key, resolves lat/lon to the
+    // right Warncell for us. Data ultimately belongs to the Deutscher
+    // Wetterdienst (Datenlizenz Deutschland – Namensnennung – Version 2.0);
+    // the attribution line lives in the banner markup.
+    const url = 'https://api.brightsky.dev/alerts?lat=51.6595&lon=7.3465';
+
+    // Only "met" (meteorological, as opposed to health) alerts at severe/
+    // extreme severity — DWD's Unwetterwarnung tiers 3–4 — and only ones
+    // that actually describe wind, to keep the banner specific to storm
+    // damage rather than firing on e.g. an extreme-heat or heavy-snow alert.
+    const isStormAlert = (alert) =>
+      alert.category === 'met' &&
+      (alert.severity === 'severe' || alert.severity === 'extreme') &&
+      /wind|sturm|orkan|böen/i.test(`${alert.event_en || ''} ${alert.event_de || ''}`);
 
     fetch(url)
       .then((response) => (response.ok ? response.json() : Promise.reject(response.status)))
       .then((data) => {
-        const over = (series) => (series || []).some((value) => value > STORM_KMH);
-        if (over(data.daily && data.daily.wind_speed_10m_max) ||
-            over(data.daily && data.daily.wind_gusts_10m_max)) {
+        if ((data.alerts || []).some(isStormAlert)) {
           stormBanner.hidden = false;
         }
       })
