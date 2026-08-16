@@ -91,16 +91,38 @@
     if (trigger) closeBtn.addEventListener('click', () => trigger.click());
   });
 
+  /* ------------------------------------------------------- image loading -- */
+
+  // Placeholder + bounce spinner over every eleventy-img picture (gallery
+  // thumbnails, portraits — see buildPicture() in eleventy.config.js) while
+  // it loads, so a lazy image popping into view on a slow connection shows
+  // something happening instead of a blank gap. The lightbox/carousel wire
+  // their own .img-frame the same way, inline in renderInto() below, because
+  // those swap an existing <img>'s src instead of loading a fresh one.
+  document.querySelectorAll('.img-frame').forEach((frame) => {
+    const img = frame.querySelector('img');
+    if (!img || (img.complete && img.naturalWidth > 0)) return; // already loaded (cache)
+    frame.classList.add('is-loading');
+    const clear = () => frame.classList.remove('is-loading');
+    img.addEventListener('load', clear, { once: true });
+    img.addEventListener('error', clear, { once: true }); // never spin forever
+  });
+
   /* ------------------------------------------------------------- gallery -- */
 
   const dataEl = document.getElementById('gallery-data');
   const images = dataEl ? JSON.parse(dataEl.textContent) : [];
 
-  function renderInto(picture, index, sizes) {
+  // onSettle fires once the *new* image has actually finished loading (or
+  // failed) — not on a fixed timer — so the spinner covers exactly the part
+  // that can vary with connection speed, and the calling img.is-swapping
+  // fade-in below isn't released early onto a still-loading picture.
+  function renderInto(picture, index, sizes, onSettle) {
     const item = images[index];
     if (!item) return;
     picture.querySelectorAll('source').forEach((s) => s.remove());
     const img = picture.querySelector('img');
+    const frame = picture.closest('.img-frame');
 
     item.sources.forEach((source) => {
       const el = document.createElement('source');
@@ -109,6 +131,14 @@
       el.sizes = sizes;
       picture.insertBefore(el, img);
     });
+
+    if (frame) frame.classList.add('is-loading');
+    const settle = () => {
+      if (frame) frame.classList.remove('is-loading');
+      if (onSettle) onSettle();
+    };
+    img.addEventListener('load', settle, { once: true });
+    img.addEventListener('error', settle, { once: true });
 
     img.src = item.src;
     img.srcset = item.srcset;
@@ -119,19 +149,18 @@
   }
 
   // Brief cross-fade on the <img> around a src swap, so next/prev reads as a
-  // transition rather than an abrupt jump. Timed rather than tied to
-  // transitionend/load, so a browser dropping an event can't strand it
-  // mid-fade; reduced motion swaps straight through.
+  // transition rather than an abrupt jump. Only the *outgoing* half is timed;
+  // the incoming half waits for renderInto()'s onSettle (the real load
+  // event) via makeViewer below, so a slow connection holds on the spinner
+  // instead of fading back in onto whatever the browser is still painting.
+  // Reduced motion swaps straight through.
   function swapWithFade(img, apply) {
     if (reduceMotion) {
       apply();
       return;
     }
     img.classList.add('is-swapping');
-    window.setTimeout(() => {
-      apply();
-      img.classList.remove('is-swapping');
-    }, 150);
+    window.setTimeout(apply, 150);
   }
 
   function makeViewer({ picture, status, caption, sizes }) {
@@ -139,7 +168,7 @@
     const img = picture.querySelector('img');
     const render = (next) => {
       index = (next + images.length) % images.length;
-      renderInto(picture, index, sizes);
+      renderInto(picture, index, sizes, () => img.classList.remove('is-swapping'));
       if (status) status.textContent = `Bild ${index + 1} von ${images.length}`;
       if (caption) caption.textContent = images[index].alt;
     };
@@ -285,9 +314,16 @@
 
   /* ------------------------------------------------------- scroll reveal -- */
 
-  // The start state lives in CSS (.js .reveal); this only flips sections on as
-  // they come into view. Under reduced motion the CSS already neutralises the
-  // start state, so the observer is skipped entirely.
+  // Content is visible by default (see .reveal in main_input.css) — the
+  // hide-then-fade-in treatment only gets opted into here, per section, and
+  // only for sections not already on screen. A section already in the
+  // viewport when this runs goes straight to .is-revealed with no
+  // .reveal-pending in between, so it never gets hidden at all: it was
+  // already visible a moment ago (however long script.js took to load), and
+  // there is nothing to animate from. This is also why reduced motion and
+  // "no IntersectionObserver" need no special-casing any more — they simply
+  // never add .reveal-pending, so every section just stays at its default
+  // visible styling.
   const revealTargets = document.querySelectorAll('.reveal');
   if (revealTargets.length && !reduceMotion && 'IntersectionObserver' in window) {
     const revealObserver = new IntersectionObserver(
@@ -308,9 +344,16 @@
       // suddenly popped in on top of it.
       { rootMargin: '0px 0px 20% 0px' }
     );
-    revealTargets.forEach((el) => revealObserver.observe(el));
-  } else {
-    revealTargets.forEach((el) => el.classList.add('is-revealed'));
+    revealTargets.forEach((el) => {
+      const rect = el.getBoundingClientRect();
+      const alreadyVisible = rect.top < window.innerHeight && rect.bottom > 0;
+      if (alreadyVisible) {
+        el.classList.add('is-revealed');
+      } else {
+        el.classList.add('reveal-pending');
+        revealObserver.observe(el);
+      }
+    });
   }
 
   /* --------------------------------------------------------- storm alert -- */
