@@ -118,21 +118,56 @@
     img.alt = item.alt;
   }
 
-  function makeViewer({ picture, status, sizes }) {
+  // Brief cross-fade on the <img> around a src swap, so next/prev reads as a
+  // transition rather than an abrupt jump. Timed rather than tied to
+  // transitionend/load, so a browser dropping an event can't strand it
+  // mid-fade; reduced motion swaps straight through.
+  function swapWithFade(img, apply) {
+    if (reduceMotion) {
+      apply();
+      return;
+    }
+    img.classList.add('is-swapping');
+    window.setTimeout(() => {
+      apply();
+      img.classList.remove('is-swapping');
+    }, 150);
+  }
+
+  function makeViewer({ picture, status, caption, sizes }) {
     let index = 0;
+    const img = picture.querySelector('img');
+    const render = (next) => {
+      index = (next + images.length) % images.length;
+      renderInto(picture, index, sizes);
+      if (status) status.textContent = `Bild ${index + 1} von ${images.length}`;
+      if (caption) caption.textContent = images[index].alt;
+    };
     return {
       show(next) {
-        index = (next + images.length) % images.length;
-        renderInto(picture, index, sizes);
-        if (status) status.textContent = `Bild ${index + 1} von ${images.length}`;
+        render(next);
       },
       next() {
-        this.show(index + 1);
+        swapWithFade(img, () => render(index + 1));
       },
       prev() {
-        this.show(index - 1);
+        swapWithFade(img, () => render(index - 1));
       },
     };
+  }
+
+  // Compensates for the vertical scrollbar disappearing behind the modal
+  // dialog and reappearing once it closes — without this, that width swing
+  // leaves the page a scrollbar's-width wider than the viewport for a beat,
+  // which reads as a horizontal scrollbar after closing the image.
+  function lockPageScroll() {
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    document.documentElement.style.overflow = 'hidden';
+    if (scrollbarWidth > 0) document.body.style.paddingRight = `${scrollbarWidth}px`;
+  }
+  function unlockPageScroll() {
+    document.documentElement.style.overflow = '';
+    document.body.style.paddingRight = '';
   }
 
   // Desktop: grid of buttons opening a modal dialog.
@@ -141,22 +176,49 @@
     const viewer = makeViewer({
       picture: dialog.querySelector('picture'),
       status: dialog.querySelector('[data-status]'),
+      caption: dialog.querySelector('[data-caption]'),
       sizes: '90vw',
     });
 
+    function openLightbox(index) {
+      viewer.show(index);
+      // showModal() provides the focus trap, Esc handling, inert background
+      // and focus restoration for free.
+      dialog.showModal();
+      lockPageScroll();
+      // Two rAFs: the visible class has to land on a frame after [open]
+      // takes effect, or the browser coalesces both and there is nothing
+      // left to transition from (no zoom-in).
+      if (reduceMotion) {
+        dialog.classList.add('lightbox-visible');
+      } else {
+        requestAnimationFrame(() => requestAnimationFrame(() => dialog.classList.add('lightbox-visible')));
+      }
+    }
+
+    // Every close path funnels through here so the zoom-out always plays
+    // before dialog.close() actually hides the element; unlockPageScroll
+    // itself lives on the native 'close' event below, so it always fires
+    // exactly once regardless of which path got us there.
+    function closeLightbox() {
+      dialog.classList.remove('lightbox-visible');
+      if (reduceMotion) {
+        dialog.close();
+      } else {
+        window.setTimeout(() => dialog.close(), 250);
+      }
+    }
+
     document.querySelectorAll('[data-gallery-index]').forEach((button) => {
       button.addEventListener('click', () => {
-        viewer.show(Number(button.dataset.galleryIndex));
-        // showModal() provides the focus trap, Esc handling, inert background
-        // and focus restoration for free.
-        dialog.showModal();
+        openLightbox(Number(button.dataset.galleryIndex));
       });
     });
 
     const close = dialog.querySelector('[data-close]');
     const prev = dialog.querySelector('[data-prev]');
     const next = dialog.querySelector('[data-next]');
-    if (close) close.addEventListener('click', () => dialog.close());
+    if (close) close.addEventListener('click', () => closeLightbox());
     if (prev) prev.addEventListener('click', () => viewer.prev());
     if (next) next.addEventListener('click', () => viewer.next());
 
@@ -170,10 +232,19 @@
       }
     });
 
+    // Esc fires 'cancel' and closes the dialog immediately by default;
+    // redirect it through the animated close so it matches every other path.
+    dialog.addEventListener('cancel', (event) => {
+      event.preventDefault();
+      closeLightbox();
+    });
+
     // Clicking the backdrop closes; clicks inside the panel must not.
     dialog.addEventListener('click', (event) => {
-      if (event.target === dialog) dialog.close();
+      if (event.target === dialog) closeLightbox();
     });
+
+    dialog.addEventListener('close', unlockPageScroll);
   }
 
   // Mobile: an inline carousel, not a dialog.
@@ -182,6 +253,7 @@
     const viewer = makeViewer({
       picture: carousel.querySelector('picture'),
       status: carousel.querySelector('[data-status]'),
+      caption: carousel.querySelector('[data-caption]'),
       sizes: '100vw',
     });
     viewer.show(0);
